@@ -1,95 +1,50 @@
 pipeline {
     agent any
-
     environment {
-        DOCKER_HUB_USER = 'jielin1234'  // Your Docker Hub username
-        DOCKER_HUB_PASS = credentials('dockerhub-credentials-id') // Jenkins secret for Docker Hub password
-        IMAGE_TAG = "latest"            // Tag for the Docker image (e.g., 'latest')
-        KUBE_CONTEXT = 'minikube'       // Kubernetes context for Minikube
+        DOCKER_HUB_USER = 'jielin1234'
+        DOCKER_HUB_PASS = credentials('dockerhub-credentials-id')
+        IMAGE_USER_SERVICE = 'jielin1234/user-service'
+        IMAGE_ORDER_SERVICE = 'jielin1234/order-service'
+        KUBE_CONFIG = '~/.kube/config'  // Path to your kubeconfig file
+        KUBE_CONTEXT = 'minikube'  // Your Kubernetes context
     }
-
     stages {
-        stage('Checkout') {
-            steps {
-                // Pull the code from the GitHub repository
-                checkout scm
-            }
-        }
-
         stage('Build User-Service Docker Image') {
             steps {
-                script {
-                    // Build Docker image for user-service
-                    sh 'docker build -t $DOCKER_HUB_USER/user-service:$IMAGE_TAG -f user-service/Dockerfile .'
+                withEnv(["PATH=/usr/local/bin:/opt/homebrew/bin:$PATH"]) {
+                    sh 'docker build -t $IMAGE_USER_SERVICE ./user-service'
                 }
             }
         }
-
         stage('Build Order-Service Docker Image') {
             steps {
-                script {
-                    // Build Docker image for order-service
-                    sh 'docker build -t $DOCKER_HUB_USER/order-service:$IMAGE_TAG -f order-service/Dockerfile .'
+                withEnv(["PATH=/usr/local/bin:/opt/homebrew/bin:$PATH"]) {
+                    sh 'docker build -t $IMAGE_ORDER_SERVICE ./order-service'
                 }
             }
         }
-
-        stage('Login to Docker Hub') {
+        stage('Push to Docker Hub') {
             steps {
-                script {
-                    // Log in to Docker Hub using the credentials stored in Jenkins
-                    sh 'echo $DOCKER_HUB_PASS | docker login -u $DOCKER_HUB_USER --password-stdin'
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials-id', passwordVariable: 'DOCKER_HUB_PASS', usernameVariable: 'DOCKER_HUB_USER')]) {
+                    withEnv(["PATH=/usr/local/bin:/opt/homebrew/bin:$PATH"]) {
+                        sh 'docker login -u $DOCKER_HUB_USER -p $DOCKER_HUB_PASS'
+                        sh 'docker push $IMAGE_USER_SERVICE'
+                        sh 'docker push $IMAGE_ORDER_SERVICE'
+                    }
                 }
             }
         }
-
-        stage('Push User-Service Docker Image') {
+        stage('Deploy to Kubernetes') {
             steps {
-                script {
-                    // Push user-service image to Docker Hub
-                    sh 'docker push $DOCKER_HUB_USER/user-service:$IMAGE_TAG'
+                withEnv(["KUBEVERSION=/usr/local/bin/kubectl", "KUBE_CONFIG=$KUBE_CONFIG", "KUBE_CONTEXT=$KUBE_CONTEXT"]) {
+                    script {
+                        sh 'kubectl config use-context $KUBE_CONTEXT'
+                        // Assuming you have a Kubernetes deployment YAML for user-service and order-service
+                        sh 'kubectl apply -f ./user-service/deployment.yaml'
+                        sh 'kubectl apply -f ./order-service/deployment.yaml'
+                    }
                 }
             }
-        }
-
-        stage('Push Order-Service Docker Image') {
-            steps {
-                script {
-                    // Push order-service image to Docker Hub
-                    sh 'docker push $DOCKER_HUB_USER/order-service:$IMAGE_TAG'
-                }
-            }
-        }
-
-        stage('Deploy User-Service to Kubernetes') {
-            steps {
-                script {
-                    // Deploy user-service image to Kubernetes (Minikube)
-                    sh '''
-                    kubectl config use-context $KUBE_CONTEXT
-                    kubectl set image deployment/user-service user-service=$DOCKER_HUB_USER/user-service:$IMAGE_TAG
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy Order-Service to Kubernetes') {
-            steps {
-                script {
-                    // Deploy order-service image to Kubernetes (Minikube)
-                    sh '''
-                    kubectl config use-context $KUBE_CONTEXT
-                    kubectl set image deployment/order-service order-service=$DOCKER_HUB_USER/order-service:$IMAGE_TAG
-                    '''
-                }
-            }
-        }
-    }
-
-    post {
-        always {
-            // Clean up Docker login session
-            sh 'docker logout'
         }
     }
 }
